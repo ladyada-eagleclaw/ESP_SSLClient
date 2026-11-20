@@ -228,6 +228,28 @@ void loop() {
 
 ## 🧰 API Highlights
 
+### Hardware entropy
+
+`ssl_client.setEntropySource(callback)` lets an application provide a hardware
+RNG or another cryptographically secure entropy source. The callback has type
+`bool (*)(uint8_t *buffer, size_t length)` and must fill the entire requested
+buffer with fresh entropy before returning `true`. It is called for every TLS
+handshake, including session resumption. Keep any hardware waits bounded.
+
+Returning `false` aborts the handshake, closes the underlying connection, and
+reports `BR_ERR_NO_RANDOM` through `getLastSSLError()`. There is no fallback to
+`random()` after a callback failure. The callback remains installed across
+`stop()` and subsequent connections.
+
+Passing `nullptr`, or never calling the setter, retains the existing Arduino
+`random()` source for compatibility. Its security depends on the board's
+implementation; a deterministic PRNG is not a suitable TLS entropy source.
+Configure a cryptographic source explicitly on such boards, including community
+CH32 (`ch32v`) boards. Entropy does not replace server authentication: configure
+trust anchors, supply current UTC time with `setX509Time()`, and connect by the
+certificate's hostname.
+
+
 | Method | Description |
 |--------|-------------|
 | `setClient(Client *client)` | Assigns the underlying transport layer |

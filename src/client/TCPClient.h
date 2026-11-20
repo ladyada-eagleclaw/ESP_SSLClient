@@ -514,6 +514,14 @@ public:
     void setX509Time(uint32_t now) { _ssl_client.setX509Time(now); }
 
     /**
+     * @brief Provide cryptographic entropy for each TLS handshake.
+     * @param source Fills the entire requested buffer and returns true. False
+     * aborts the handshake without falling back to random(). Passing nullptr
+     * restores the library's existing random() source.
+     */
+    void setEntropySource(bool (*source)(uint8_t *, size_t)) { _ssl_client.setEntropySource(source); }
+
+    /**
      * @brief Gets the status of Maximum Fragment Length Negotiation (MFLN).
      * @return The MFLN status code or 0 if MFLN was not negotiated.
      */

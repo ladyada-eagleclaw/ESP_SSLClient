@@ -613,6 +613,13 @@ public:
 
     void setX509Time(uint32_t now) { _now = now; }
 
+    /**
+     * @brief Provide cryptographic entropy for each TLS handshake.
+     * @param source Fills the entire buffer and returns true, or returns false
+     * to abort the connection. nullptr restores the legacy random() source.
+     */
+    void setEntropySource(bool (*source)(uint8_t *, size_t)) { _entropySource = source; }
+
 #if !defined(SSLCLIENT_INSECURE_ONLY)
     void setKnownKey(const PublicKey *pk, unsigned usages = BR_KEYTYPE_KEYX | BR_KEYTYPE_SIGN)
     {
@@ -716,7 +723,7 @@ public:
         int err = 0;
         int error_code_for_lookup = 0; // New variable to isolate the base error for the switch
 
-        err = br_ssl_engine_last_error(_eng);
+        err = _eng ? br_ssl_engine_last_error(_eng) : _lastSSLError;
 
         // 1. Determine the effective error code for lookup
         if (_oom_err)
@@ -1491,6 +1498,7 @@ private:
 #endif
         mFreeSSL();
         _oom_err = false;
+        _lastSSLError = 0;
 
 #if defined(ENABLE_DEBUG) && !defined(SSLCLIENT_INSECURE_ONLY)
         // BearSSL will reject all connections unless an authentication option is set, warn in DEBUG builds
@@ -1613,9 +1621,24 @@ private:
         // we want 128 bits to be safe, as recommended by the bearssl docs
         uint8_t rng_seeds[16];
 
-        // prng
-        for (uint8_t i = 0; i < sizeof rng_seeds; i++)
-            rng_seeds[i] = static_cast<uint8_t>(random(256));
+        if (_entropySource)
+        {
+            if (!_entropySource(rng_seeds, sizeof rng_seeds))
+            {
+                mFreeSSL();
+                _lastSSLError = BR_ERR_NO_RANDOM;
+                setWriteError(esp_ssl_connection_fail);
+                if (_basic_client)
+                    _basic_client->stop();
+                return 0;
+            }
+        }
+        else
+        {
+            // Preserve the existing source when no callback was configured.
+            for (uint8_t i = 0; i < sizeof rng_seeds; i++)
+                rng_seeds[i] = static_cast<uint8_t>(random(256));
+        }
 
         br_ssl_engine_inject_entropy(_eng, rng_seeds, sizeof rng_seeds);
 
@@ -2408,11 +2431,14 @@ private:
 
     void mFreeSSL()
     {
+        // Keep the diagnostic before freeing the context which owns _eng.
+        if (_eng)
+            _lastSSLError = br_ssl_engine_last_error(_eng);
+        _eng = nullptr;
 #if !defined(STATIC_SSLCLIENT_CONTEXT)
         if (_sc)
             esp_sslclient_free((br_ssl_client_context **)&_sc);
 #endif
-        // _eng is an alias, so it is handled by the overall memory sweep.
 
 #if !defined(STATIC_X509_CONTEXT)
 
@@ -2547,6 +2573,8 @@ private:
     int _iobuf_out_size = 512;
 
     uint32_t _now = 0;
+    bool (*_entropySource)(uint8_t *, size_t) = nullptr;
+    int _lastSSLError = 0;
 
 #if defined(ENABLE_FS)
     CertStoreBase *_certStore = 0;
